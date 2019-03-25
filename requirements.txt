@@ -19,7 +19,7 @@ cryptography
 datasketch
 elasticsearch==6.3.1
 entrypoints
-enum34
+#enum34
 Flask==1.0.2
 Flask-Bcrypt
 Flask-Login==0.4.1
