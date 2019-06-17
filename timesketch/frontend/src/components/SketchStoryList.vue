@@ -16,14 +16,11 @@ limitations under the License.
 <template>
   <div>
     <ul class="content-list">
-      <li style="padding:10px;" v-for="timeline in timelines" :key="timeline.id">
+      <li style="padding:10px;border-bottom:none;" v-for="story in sketch.stories" :key="story.id">
         <div>
-          <div class="ts-timeline-color-box is-pulled-left" v-bind:style="{ 'background-color': '#' + timeline.color}"></div>
-          <strong>{{ timeline.name }}</strong>
+          <router-link :to="{ name: 'SketchStoryContent', params: {sketchId: sketch.id, storyId: story.id}}"><strong>{{ story.title }}</strong></router-link>
           <br>
-          <span class="is-size-7">
-            Added {{ timeline.updated_at | moment("YYYY-MM-DD HH:mm") }}
-          </span>
+          <span class="is-size-7">Last activity {{ story.updated_at | moment("YYYY-MM-DD HH:mm") }}</span>
         </div>
       </li>
     </ul>
@@ -32,28 +29,32 @@ limitations under the License.
 
 <script>
 export default {
-  name: 'ts-sketch-overview-timeline-list',
-  props: ['timelines']
+  name: 'ts-home-sketch-list',
+  data () {
+    return {
+      stories: []
+    }
+  },
+  computed: {
+    sketch () {
+      return this.$store.state.sketch
+    },
+    meta () {
+      return this.$store.state.meta
+    }
+  }
 }
 </script>
 
 <!-- CSS scoped to this component only -->
 <style scoped lang="scss">
-  .ts-timeline-color-box {
-    width:43px;
-    height:43px;
-    margin-top: 2px;
-    margin-right: 10px;
-    border-radius: 4px;
-  }
-
   ul.content-list {
       list-style: none;
   }
 
   ul.content-list>li {
-      padding-top: 5px;
-      padding-bottom: 5px;
+      padding-top: 15px;
+      padding-bottom: 15px;
       border-bottom: 1px solid #eee;
       display: block;
       margin: 0;

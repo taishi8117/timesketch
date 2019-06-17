@@ -22,6 +22,10 @@ $section-padding: 15px 15px 0 15px;
 $tabs-link-active-border-bottom-color: hsl(0, 0%, 29%);
 $tabs-link-active-color: hsl(0, 0%, 21%);
 
+$message-header-background-color: rgba(229, 229, 229, 0.84);
+$message-header-color: #333333;
+$message-background-color: #f9f9f9;
+
 // Font Awesome
 $fa-font-path: "~@fortawesome/fontawesome-free/webfonts";
 @import "../../node_modules/@fortawesome/fontawesome-free/scss/fontawesome";
@@ -47,3 +51,29 @@ body {
 .card-header {
     border-bottom: 1px solid #eee;
 }
+
+.ts-timeline-color-box {
+    width:43px;
+    height:43px;
+    margin-top: 2px;
+    margin-right: 10px;
+    border-radius: 4px;
+}
+
+ul.content-list {
+    list-style: none;
+}
+
+ul.content-list>li {
+    padding-top: 5px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid #eee;
+    display: block;
+    margin: 0;
+}
+
+ul.content-list>li:hover {
+    background: #fcfcfc;
+}
+
+ul.content-list>li:last-child { border-bottom: none; }

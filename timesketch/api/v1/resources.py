@@ -53,6 +53,7 @@ from flask_restful import Resource
 from sqlalchemy import desc
 from sqlalchemy import not_
 
+from timesketch.lib.aggregators import manager as aggregator_manager
 from timesketch.lib.aggregators_old import heatmap
 from timesketch.lib.aggregators_old import histogram
 from timesketch.lib.definitions import DEFAULT_SOURCE_FIELDS
@@ -67,8 +68,10 @@ from timesketch.lib.datastores.neo4j import SCHEMA as neo4j_schema
 from timesketch.lib.errors import ApiHTTPError
 from timesketch.lib.emojis import get_emojis_as_dict
 from timesketch.lib.forms import AddTimelineSimpleForm
-from timesketch.lib.forms import AggregationForm
+from timesketch.lib.forms import AggregationExploreForm
+from timesketch.lib.forms import AggregationLegacyForm
 from timesketch.lib.forms import CreateTimelineForm
+from timesketch.lib.forms import SaveAggregationForm
 from timesketch.lib.forms import SaveViewForm
 from timesketch.lib.forms import NameDescriptionForm
 from timesketch.lib.forms import EventAnnotationForm
@@ -78,11 +81,13 @@ from timesketch.lib.forms import UploadFileForm
 from timesketch.lib.forms import StoryForm
 from timesketch.lib.forms import GraphExploreForm
 from timesketch.lib.forms import SearchIndexForm
+from timesketch.lib.forms import TimelineForm
 from timesketch.lib.utils import get_validated_indices
 from timesketch.lib.experimental.utils import GRAPH_VIEWS
 from timesketch.lib.experimental.utils import get_graph_views
 from timesketch.lib.experimental.utils import get_graph_view
 from timesketch.models import db_session
+from timesketch.models.sketch import Aggregation
 from timesketch.models.sketch import Event
 from timesketch.models.sketch import SearchIndex
 from timesketch.models.sketch import Sketch
@@ -109,6 +114,19 @@ def bad_request(message):
 class ResourceMixin(object):
     """Mixin for API resources."""
     # Schemas for database model resources
+    user_fields = {'username': fields.String}
+
+    aggregation_fields = {
+        'id': fields.Integer,
+        'name': fields.String,
+        'description': fields.String,
+        'agg_type': fields.String,
+        'parameters': fields.String,
+        'chart_type': fields.String,
+        'user': fields.Nested(user_fields),
+        'created_at': fields.DateTime,
+        'updated_at': fields.DateTime
+    }
 
     status_fields = {
         'id': fields.Integer,
@@ -120,6 +138,7 @@ class ResourceMixin(object):
     searchindex_fields = {
         'id': fields.Integer,
         'name': fields.String,
+        'user': fields.Nested(user_fields),
         'description': fields.String,
         'index_name': fields.String,
         'status': fields.Nested(status_fields),
@@ -131,6 +150,7 @@ class ResourceMixin(object):
     timeline_fields = {
         'id': fields.Integer,
         'name': fields.String,
+        'user': fields.Nested(user_fields),
         'description': fields.String,
         'status': fields.Nested(status_fields),
         'color': fields.String,
@@ -139,8 +159,6 @@ class ResourceMixin(object):
         'created_at': fields.DateTime,
         'updated_at': fields.DateTime
     }
-
-    user_fields = {'username': fields.String}
 
     searchtemplate_fields = {
         'id': fields.Integer,
@@ -161,6 +179,16 @@ class ResourceMixin(object):
         'query_filter': fields.String,
         'query_dsl': fields.String,
         'searchtemplate': fields.Nested(searchtemplate_fields),
+        'aggregation': fields.Nested(aggregation_fields),
+        'created_at': fields.DateTime,
+        'updated_at': fields.DateTime
+    }
+
+    story_fields = {
+        'id': fields.Integer,
+        'title': fields.String,
+        'content': fields.String,
+        'user': fields.Nested(user_fields),
         'created_at': fields.DateTime,
         'updated_at': fields.DateTime
     }
@@ -171,18 +199,9 @@ class ResourceMixin(object):
         'description': fields.String,
         'user': fields.Nested(user_fields),
         'timelines': fields.List(fields.Nested(timeline_fields)),
+        'stories': fields.List(fields.Nested(story_fields)),
         'active_timelines': fields.List(fields.Nested(timeline_fields)),
         'status': fields.Nested(status_fields),
-        'created_at': fields.DateTime,
-        'updated_at': fields.DateTime
-    }
-
-    story_fields = {
-        'id': fields.Integer,
-        'title': fields.String,
-        'content': fields.String,
-        'user': fields.Nested(user_fields),
-        'sketch': fields.Nested(sketch_fields),
         'created_at': fields.DateTime,
         'updated_at': fields.DateTime
     }
@@ -202,6 +221,7 @@ class ResourceMixin(object):
     }
 
     fields_registry = {
+        'aggregation': aggregation_fields,
         'searchindex': searchindex_fields,
         'timeline': timeline_fields,
         'searchtemplate': searchtemplate_fields,
@@ -321,12 +341,12 @@ class SketchListResource(ResourceMixin, Resource):
                 description=form.description.data,
                 user=current_user)
             sketch.status.append(sketch.Status(user=None, status='new'))
+            db_session.add(sketch)
+            db_session.commit()
             # Give the requesting user permissions on the new sketch.
             sketch.grant_permission(permission='read', user=current_user)
             sketch.grant_permission(permission='write', user=current_user)
             sketch.grant_permission(permission='delete', user=current_user)
-            db_session.add(sketch)
-            db_session.commit()
             return self.to_json(sketch, status_code=HTTP_STATUS_CODE_CREATED)
         return abort(HTTP_STATUS_CODE_BAD_REQUEST)
 
@@ -343,6 +363,12 @@ class SketchResource(ResourceMixin, Resource):
         """
         sketch = Sketch.query.get_with_acl(sketch_id)
         meta = dict(
+            aggregations=[{
+                'name': aggregation.name,
+                'id': aggregation.id,
+                'created_at': aggregation.created_at,
+                'updated_at': aggregation.updated_at
+            } for aggregation in sketch.get_named_aggregations],
             views=[{
                 'name': view.name,
                 'id': view.id,
@@ -353,8 +379,22 @@ class SketchResource(ResourceMixin, Resource):
                 'name': searchtemplate.name,
                 'id': searchtemplate.id
             } for searchtemplate in SearchTemplate.query.all()],
-            emojis=get_emojis_as_dict())
+            emojis=get_emojis_as_dict(),
+            permissions={
+                'read': bool(sketch.has_permission(current_user, 'read')),
+                'write': bool(sketch.has_permission(current_user, 'write')),
+                'delete': bool(sketch.has_permission(current_user, 'delete')),
+            })
         return self.to_json(sketch, meta=meta)
+
+    @login_required
+    def delete(self, sketch_id):
+        """Handles DELETE request to the resource."""
+        sketch = Sketch.query.get_with_acl(sketch_id)
+        if not sketch.has_permission(current_user, 'delete'):
+            abort(HTTP_STATUS_CODE_FORBIDDEN)
+        sketch.set_status(status='deleted')
+        return HTTP_STATUS_CODE_OK
 
 
 class ViewListResource(ResourceMixin, Resource):
@@ -618,6 +658,9 @@ class ExploreResource(ResourceMixin, Resource):
             t.searchindex.index_name
             for t in sketch.timelines
         }
+        if not query_filter:
+            query_filter = {}
+
         indices = query_filter.get('indices', sketch_indices)
 
         # If _all in indices then execute the query on all indices
@@ -696,9 +739,226 @@ class AggregationResource(ResourceMixin, Resource):
     """Resource to query for aggregated results."""
 
     @login_required
+    def get(self, sketch_id, aggregation_id):  # pylint: disable=unused-argument
+        """Handles POST request to the resource.
+
+        Handler for /api/v1/sketches/:sketch_id/aggregation/:aggregation_id
+
+        Args:
+            sketch_id: Integer primary key for a sketch database model
+            aggregation_id: Integer primary key for an agregation database model
+
+        Returns:
+            JSON with aggregation results
+        """
+        sketch = Sketch.query.get_with_acl(sketch_id)
+        aggregation = Aggregation.query.get(aggregation_id)
+
+        # Check that this aggregation belongs to the sketch
+        if aggregation.sketch_id != sketch.id:
+            abort(HTTP_STATUS_CODE_NOT_FOUND)
+
+        # If this is a user state view, check that it
+        # belongs to the current_user
+        if aggregation.name == '' and aggregation.user != current_user:
+            abort(HTTP_STATUS_CODE_FORBIDDEN)
+
+        return self.to_json(aggregation)
+
+    @login_required
+    def post(self, sketch_id, aggregation_id):  # pylint: disable=unused-argument
+        """Handles POST request to the resource.
+
+        Handler for /api/v1/sketches/:sketch_id/aggregation/:aggregation_id
+
+        Args:
+            sketch_id: Integer primary key for a sketch database model
+            aggregation_id: Integer primary key for an aggregation database
+                model
+        """
+        form = SaveAggregationForm.build(request)
+        if not form.validate_on_submit():
+            return abort(HTTP_STATUS_CODE_BAD_REQUEST)
+
+        sketch = Sketch.query.get_with_acl(sketch_id)
+        aggregation = Aggregation.query.get(aggregation_id)
+
+        aggregation.name = form.name.data
+        aggregation.description = form.description.data
+        aggregation.agg_type = form.agg_type.data
+        aggregation.chart_type = form.chart_type.data
+        aggregation.user = current_user
+        aggregation.sketch = sketch
+
+        aggregation.parameters = json.dumps(
+            form.parameters.data, ensure_ascii=False)
+
+        if form.view.data:
+            aggregation.view = form.view_id.data
+
+        db_session.add(aggregation)
+        db_session.commit()
+
+        return self.to_json(aggregation, status_code=HTTP_STATUS_CODE_CREATED)
+
+
+class AggregationExploreResource(ResourceMixin, Resource):
+    """Resource to send an aggregation request."""
+
+    REMOVE_FIELDS = frozenset(['_shards', 'hits', 'timed_out', 'took'])
+
+    @login_required
     def post(self, sketch_id):
         """Handles POST request to the resource.
-        Handler for /api/v1/sketches/:sketch_id/aggregation/
+
+        Handler for /api/v1/sketches/<int:sketch_id>/aggregation/explore/
+
+        Args:
+            sketch_id: Integer primary key for a sketch database model
+
+        Returns:
+            JSON with aggregation results
+        """
+        form = AggregationExploreForm.build(request)
+        if not form.validate_on_submit():
+            return abort(HTTP_STATUS_CODE_BAD_REQUEST)
+
+        sketch = Sketch.query.get_with_acl(sketch_id)
+        sketch_indices = {
+            t.searchindex.index_name
+            for t in sketch.timelines
+        }
+
+        aggregation_dsl = form.aggregation_dsl.data
+        aggregator_name = form.aggregator_name.data
+
+        if aggregator_name:
+            aggregator_parameters = json.loads(form.aggregator_parameters.data)
+            agg_class = aggregator_manager.AggregatorManager.get_aggregator(
+                aggregator_name)
+            if not agg_class:
+                return {}
+            if not aggregator_parameters:
+                aggregator_parameters = {}
+            aggregator = agg_class(sketch_id=sketch_id)
+            time_before = time.time()
+            result_obj = aggregator.run(**aggregator_parameters)
+            time_after = time.time()
+
+            buckets = result_obj.to_dict()
+            buckets['buckets'] = buckets.pop('values')
+            result = {
+                'aggregation_result': {
+                    aggregator_name: buckets
+                }
+            }
+            meta = {
+                'method': 'aggregator_run',
+                'name': aggregator_name,
+                'es_time': time_after - time_before,
+            }
+
+        elif aggregation_dsl:
+            # pylint: disable=unexpected-keyword-arg
+            result = self.datastore.client.search(
+                index=','.join(sketch_indices), body=aggregation_dsl, size=0)
+
+            meta = {
+                'es_time': result.get('took', 0),
+                'es_total_count': result.get('hits', {}).get('total', 0),
+                'timed_out': result.get('timed_out', False),
+                'method': 'aggregator_query',
+                'max_score': result.get('hits', {}).get('max_score', 0.0)
+            }
+        else:
+            return abort(HTTP_STATUS_CODE_BAD_REQUEST)
+
+        result_keys = set(result.keys()) - self.REMOVE_FIELDS
+        objects = [result[key] for key in result_keys]
+        schema = {'meta': meta, 'objects': objects}
+        return jsonify(schema)
+
+
+class AggregationListResource(ResourceMixin, Resource):
+    """Resource to query for a list of stored aggregation queries."""
+
+    @login_required
+    def get(self, sketch_id):
+        """Handles GET request to the resource.
+
+        Handler for /api/v1/sketches/<int:sketch_id>/aggregation/
+
+        Args:
+            sketch_id: Integer primary key for a sketch database model
+
+        Returns:
+            Views in JSON (instance of flask.wrappers.Response)
+        """
+        sketch = Sketch.query.get_with_acl(sketch_id)
+        aggregations = sketch.get_named_aggregations
+        return self.to_json(aggregations)
+
+    @staticmethod
+    def create_aggregation_from_form(sketch, form):
+        """Creates an aggregation from form data.
+
+        Args:
+            sketch: Instance of timesketch.models.sketch.Sketch
+            form: Instance of timesketch.lib.forms.SaveAggregationForm
+
+        Returns:
+            An aggregation (instance of timesketch.models.sketch.Aggregation)
+        """
+        # Default to user supplied data
+        name = form.name.data
+        description = form.description.data
+        agg_type = form.agg_type.data
+        parameters = json.dumps(form.parameters.data, ensure_ascii=False)
+        chart_type = form.chart_type.data
+        view_id = form.view_id.data
+
+        # Create the aggregation in the database
+        aggregation = Aggregation(
+            name=name,
+            description=description,
+            agg_type=agg_type,
+            parameters=parameters,
+            chart_type=chart_type,
+            user=current_user,
+            sketch=sketch,
+            view=view_id
+        )
+        db_session.add(aggregation)
+        db_session.commit()
+
+        return aggregation
+
+    @login_required
+    def post(self, sketch_id):
+        """Handles POST request to the resource.
+
+        Args:
+            sketch_id: Integer primary key for a sketch database model
+
+        Returns:
+            An aggregation in JSON (instance of flask.wrappers.Response)
+        """
+        form = SaveAggregationForm.build(request)
+        if not form.validate_on_submit():
+            return abort(HTTP_STATUS_CODE_BAD_REQUEST)
+
+        sketch = Sketch.query.get_with_acl(sketch_id)
+        aggregation = self.create_aggregation_from_form(sketch, form)
+        return self.to_json(aggregation, status_code=HTTP_STATUS_CODE_CREATED)
+
+
+class AggregationLegacyResource(ResourceMixin, Resource):
+    """Resource to query for the legacy aggregated results."""
+
+    @login_required
+    def post(self, sketch_id):
+        """Handles POST request to the resource.
+        Handler for /api/v1/sketches/:sketch_id/aggregation/legacy
 
         Args:
             sketch_id: Integer primary key for a sketch database model
@@ -707,7 +967,7 @@ class AggregationResource(ResourceMixin, Resource):
             JSON with aggregation results
         """
         sketch = Sketch.query.get_with_acl(sketch_id)
-        form = AggregationForm.build(request)
+        form = AggregationLegacyForm.build(request)
 
         if form.validate_on_submit():
             query_filter = form.filter.data
@@ -1173,9 +1433,12 @@ class StoryListResource(ResourceMixin, Resource):
         """
         form = StoryForm.build(request)
         if form.validate_on_submit():
+            title = ''
+            if form.title.data:
+                title = form.title.data
             sketch = Sketch.query.get_with_acl(sketch_id)
             story = Story(
-                title='', content='', sketch=sketch, user=current_user)
+                title=title, content='', sketch=sketch, user=current_user)
             db_session.add(story)
             db_session.commit()
             return self.to_json(story, status_code=HTTP_STATUS_CODE_CREATED)
@@ -1446,6 +1709,36 @@ class TimelineResource(ResourceMixin, Resource):
             abort(HTTP_STATUS_CODE_FORBIDDEN)
 
         return self.to_json(timeline)
+
+    @login_required
+    def post(self, sketch_id, timeline_id):
+        """Handles GET request to the resource.
+
+        Args:
+            sketch_id: Integer primary key for a sketch database model
+            timeline_id: Integer primary key for a timeline database model
+        """
+        sketch = Sketch.query.get_with_acl(sketch_id)
+        timeline = Timeline.query.get(timeline_id)
+        form = TimelineForm.build(request)
+
+        # Check that this timeline belongs to the sketch
+        if timeline.sketch_id != sketch.id:
+            abort(HTTP_STATUS_CODE_NOT_FOUND)
+
+        if not sketch.has_permission(user=current_user, permission='write'):
+            abort(HTTP_STATUS_CODE_FORBIDDEN)
+
+        if not form.validate_on_submit():
+            abort(HTTP_STATUS_CODE_BAD_REQUEST)
+
+        timeline.name = form.name.data
+        timeline.description = form.description.data
+        timeline.color = form.color.data
+        db_session.add(timeline)
+        db_session.commit()
+
+        return HTTP_STATUS_CODE_OK
 
     @login_required
     def delete(self, sketch_id, timeline_id):

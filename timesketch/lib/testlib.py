@@ -52,6 +52,31 @@ class TestConfig(object):
     SIMILARITY_DATA_TYPES = []
 
 
+class MockElasticClient(object):
+    """A mock implementation of a ElasticSearch client."""
+
+    def search(self, index, body, size):  # pylint: disable=unused-argument
+        """Mock a client search, used for aggregations."""
+        meta = {
+            'es_time': 23,
+            'es_total_count': 5621,
+            'timed_out': False,
+            'max_score': 0.0
+        }
+
+        objects = [{
+            'my_aggregation': {'buckets': [
+                {'foobar': 1, 'second': 'foobar'},
+                {'foobar': 4, 'second': 'more stuff'},
+                {'foobar': 532, 'second': 'hvernig hefurdu thad'}]},
+            'my_second_aggregation': {'buckets': [
+                {'foobar': 54, 'second': 'faranlegt', 'third': 'other text'},
+                {'foobar': 42, 'second': 'asnalegt'}]}
+
+        }]
+        return {'meta': meta, 'objects': objects}
+
+
 class MockDataStore(object):
     """A mock implementation of a Datastore."""
     event_dict = {
@@ -122,6 +147,7 @@ class MockDataStore(object):
             host: Hostname or IP address to the datastore
             port: The port used by the datastore
         """
+        self.client = MockElasticClient()
         self.host = host
         self.port = port
 
@@ -276,7 +302,7 @@ class BaseTest(TestCase):
         Returns:
             A user (instance of timesketch.models.user.User)
         """
-        user = User(username=username)
+        user = User.get_or_create(username=username)
         if set_password:
             user.set_password(plaintext='test', rounds=4)
         self._commit_to_database(user)
@@ -291,7 +317,7 @@ class BaseTest(TestCase):
         Returns:
             A group (instance of timesketch.models.user.Group)
         """
-        group = Group(name=name)
+        group = Group.get_or_create(name=name)
         user.groups.append(group)
         self._commit_to_database(group)
         return group
@@ -307,7 +333,7 @@ class BaseTest(TestCase):
         Returns:
             A sketch (instance of timesketch.models.sketch.Sketch)
         """
-        sketch = Sketch(name=name, description=name, user=user)
+        sketch = Sketch.get_or_create(name=name, description=name, user=user)
         if acl:
             for permission in ['read', 'write', 'delete']:
                 sketch.grant_permission(permission=permission, user=user)
@@ -329,7 +355,7 @@ class BaseTest(TestCase):
         Returns:
             A searchindex (instance of timesketch.models.sketch.SearchIndex)
         """
-        searchindex = SearchIndex(
+        searchindex = SearchIndex.get_or_create(
             name=name, description=name, index_name=name, user=user)
         if acl:
             for permission in ['read', 'write', 'delete']:
@@ -349,7 +375,7 @@ class BaseTest(TestCase):
         Returns:
             An event (instance of timesketch.models.sketch.Event)
         """
-        event = Event(
+        event = Event.get_or_create(
             sketch=sketch, searchindex=searchindex, document_id='test')
         comment = event.Comment(comment='test', user=user)
         event.comments.append(comment)
@@ -366,7 +392,8 @@ class BaseTest(TestCase):
         Returns:
             A story (instance of timesketch.models.story.Story)
         """
-        story = Story(title='Test', content='Test', sketch=sketch, user=user)
+        story = Story.get_or_create(
+            title='Test', content='Test', sketch=sketch, user=user)
         self._commit_to_database(story)
         return story
 

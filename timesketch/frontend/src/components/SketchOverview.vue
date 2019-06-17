@@ -19,12 +19,6 @@ limitations under the License.
     <section class="section">
       <div class="container">
         <ts-navbar-secondary currentAppContext="sketch" currentPage="overview">
-          <a class="button is-success is-rounded" style="margin-right:7px;" v-on:click="showUploadTimelineModal = !showUploadTimelineModal">
-              <span class="icon is-small">
-                <i class="fas fa-plus"></i>
-              </span>
-            <span>Timeline</span>
-          </a>
           <a class="button is-link is-rounded" style="margin-right:10px;">
               <span class="icon is-small">
                 <i class="fas fa-users"></i>
@@ -42,18 +36,9 @@ limitations under the License.
             </div>
             <div class="dropdown-menu" id="dropdown-menu" role="menu">
               <div class="dropdown-content">
-                <a class="dropdown-item">
-                <span class="icon is-small" style="margin-right:5px;">
-                  <i class="fas fa-trash"></i>
-                </span>
+                <a v-if="meta.permissions.delete" class="dropdown-item" v-on:click="showDeleteSketchModal = !showDeleteSketchModal">
+                  <span class="icon is-small" style="margin-right:5px;"><i class="fas fa-trash"></i></span>
                   <span>Delete</span>
-                </a>
-                <hr class="dropdown-divider">
-                <a class="dropdown-item">
-                <span class="icon is-small" style="margin-right:5px;">
-                  <i class="fas fa-edit"></i>
-                </span>
-                  <span>Edit</span>
                 </a>
               </div>
             </div>
@@ -62,7 +47,7 @@ limitations under the License.
       </div>
     </section>
 
-    <div class="modal" v-bind:class="{ 'is-active': showUploadTimelineModal }">>
+    <div class="modal" v-bind:class="{ 'is-active': showUploadTimelineModal }">
       <div class="modal-background"></div>
       <div class="modal-content">
         <div class="card">
@@ -71,12 +56,46 @@ limitations under the License.
           </header>
           <div class="card-content">
             <div class="content">
+              <p>
+                Supported formats are Plaso storage file, JSONL, or a CSV file.
+                If you are uploading a CSV or JSONL file make sure to read the <a href="https://github.com/google/timesketch/blob/master/docs/Users-Guide.md#adding-timelines" rel="noreferrer" target="_blank">documentation</a> to learn what columns are needed.
+              </p>
               <ts-upload-timeline-form @toggleModal="showUploadTimelineModal = !showUploadTimelineModal"></ts-upload-timeline-form>
             </div>
           </div>
         </div>
       </div>
       <button class="modal-close is-large" aria-label="close" v-on:click="showUploadTimelineModal = !showUploadTimelineModal"></button>
+    </div>
+
+    <div class="modal" v-bind:class="{ 'is-active': showDeleteSketchModal }">
+      <div class="modal-background"></div>
+      <div class="modal-content">
+        <div class="card">
+          <header class="card-header">
+            <p class="card-header-title">Delete sketch</p>
+          </header>
+          <div class="card-content">
+            <div class="content">
+              <p>Are you sure you want to delete this sketch?</p>
+              <div class="field is-grouped">
+                <p class="control">
+                  <button class="button is-danger" v-on:click="deleteSketch">
+                    <span class="icon is-small" style="margin-right:5px;"><i class="fas fa-trash"></i></span>
+                    <span>Delete</span>
+                  </button>
+                </p>
+                <p class="control">
+                  <button class="button" v-on:click="showDeleteSketchModal = !showDeleteSketchModal">
+                    <span>I changed my mind, keep the sketch!</span>
+                  </button>
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <button class="modal-close is-large" aria-label="close" v-on:click="showDeleteSketchModal = !showDeleteSketchModal"></button>
     </div>
 
     <!-- Title and description -->
@@ -91,53 +110,92 @@ limitations under the License.
     </section>
 
     <!-- Stats -->
-    <section class="section">
+    <section class="section" v-if="sketch.timelines.length">
       <div class="container">
         <div class="card" style="min-height: 100px;">
           <div class="card-content">
-            <ts-sketch-metrics :timelines="sketch.active_timelines" :views="meta.views" :count="count"></ts-sketch-metrics>
+            <ts-sketch-metrics :timelines="sketch.active_timelines" :views="meta.views" :stories="sketch.stories" :count="count"></ts-sketch-metrics>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- Timeline and View lists-->
-    <section class="section">
+    <!-- Timeline, Saved View and Stories lists-->
+    <section class="section" v-if="sketch.timelines && sketch.timelines.length ? sketch.timelines.length: false">
       <div class="container">
         <div class="columns">
-          <div class="column">
+
+          <!-- Timelines -->
+          <div class="column" v-if="sketch.timelines && sketch.timelines.length ? sketch.timelines.length: false">
             <div class="card has-min-height">
               <header class="card-header">
                 <p class="card-header-title">Timelines</p>
+                <div class="field is-grouped is-pulled-right" style="padding: 0.75rem;">
+                  <p class="control">
+                    <router-link class="button is-rounded is-small" :to="{ name: 'SketchTimelines' }">
+                      <span class="icon is-small">
+                        <i class="fas fa-cog"></i>
+                      </span>
+                      <span>Manage</span>
+                    </router-link>
+                  </p>
+                  <p class="control">
+                    <button class="button is-success is-rounded is-small" v-on:click="showUploadTimelineModal = !showUploadTimelineModal">
+                        <span class="icon is-small">
+                          <i class="fas fa-plus"></i>
+                        </span>
+                      <span>Timeline</span>
+                    </button>
+                  </p>
+                </div>
               </header>
               <div class="card-content" style="padding:5px;">
-                <ts-timeline-list :timelines="sketch.timelines"></ts-timeline-list>
+                <ts-timeline-list :timelines="sketch.timelines" :controls="false"></ts-timeline-list>
               </div>
             </div>
           </div>
-          <div class="column">
+
+          <!-- Saved views -->
+          <div class="column" v-if="meta.views && meta.views.length ? meta.views.length: false">
             <div class="card has-min-height">
               <header class="card-header">
                 <p class="card-header-title">Views</p>
               </header>
-              <div class="card-content" style="padding:10px;">
+              <div class="card-content" style="padding:5px;">
                 <ts-saved-view-list :views="meta.views"></ts-saved-view-list>
+              </div>
+            </div>
+          </div>
+
+          <!-- Stories -->
+          <div class="column" v-if="sketch.stories && sketch.stories.length ? sketch.stories.length: false">
+            <div class="card has-min-height">
+              <header class="card-header">
+                <p class="card-header-title">Stories</p>
+              </header>
+              <div class="card-content" style="padding:5px;">
+                <ts-sketch-story-list></ts-sketch-story-list>
               </div>
             </div>
           </div>
         </div>
       </div>
     </section>
+
+    <ts-sketch-timelines-manage v-if="!sketch.timelines.length"></ts-sketch-timelines-manage>
 
   </div>
 </template>
 
 <script>
+import ApiClient from '../utils/RestApiClient'
 import TsSketchSummary from './SketchOverviewSummary'
 import TsSketchMetrics from './SketchOverviewMetrics'
-import TsTimelineList from './SketchOverviewTimelineList'
+import TsTimelineList from './SketchTimelineList'
 import TsSavedViewList from './SketchOverviewViewList'
+import TsSketchStoryList from './SketchStoryList'
 import TsUploadTimelineForm from './SketchUploadTimelineForm'
+import TsSketchTimelinesManage from './SketchTimelinesManage'
 
 export default {
   name: 'ts-sketch-overview',
@@ -146,12 +204,15 @@ export default {
     TsSketchSummary,
     TsTimelineList,
     TsSavedViewList,
-    TsUploadTimelineForm
+    TsUploadTimelineForm,
+    TsSketchStoryList,
+    TsSketchTimelinesManage
   },
   data () {
     return {
       settingsDropdownActive: false,
-      showUploadTimelineModal: false
+      showUploadTimelineModal: false,
+      showDeleteSketchModal: false
     }
   },
   computed: {
@@ -164,7 +225,17 @@ export default {
     count () {
       return this.$store.state.count
     }
+  },
+  methods: {
+    deleteSketch: function () {
+      ApiClient.deleteSketch(this.sketch.id).then((response) => {
+        this.$router.push({ name: 'Home' })
+      }).catch((e) => {
+        console.error(e)
+      })
+    }
   }
+
 }
 </script>
 
